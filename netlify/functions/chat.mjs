@@ -1,7 +1,13 @@
 // Serverless Gemini proxy. The API key lives ONLY in this function's environment
 // (GEMINI_API_KEY) and never reaches the browser.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// Tried in order; if one is overloaded, slow or errors, the next one is used.
+// thinkingOff = send thinkingBudget:0 (only models that accept it).
+const MODELS = [
+  { name: 'gemini-3.5-flash-lite', thinkingOff: false },
+  { name: 'gemini-flash-lite-latest', thinkingOff: false },
+  { name: 'gemini-3.8-flash', thinkingOff: true },
+];
 
 const SYSTEM = `You are ShopAssist AI, the friendly shopping assistant of the ShopAssist e-commerce store.
 You help customers with: product discovery and recommendations, order status and tracking, returns and refunds, and payment questions.
@@ -21,31 +27,29 @@ const json = (body, status = 200) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 // Netlify stops synchronous functions at ~10 s, so everything must finish before that.
 async function askGemini(key, systemText, contents) {
   const started = Date.now();
-  let lastError = 'Unknown error';
+  const errors = [];
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const remaining = 8500 - (Date.now() - started);
-    if (remaining < 1500) break;
+  for (const { name: model, thinkingOff } of MODELS) {
+    const remaining = 8800 - (Date.now() - started);
+    if (remaining < 1200) break;
 
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-          signal: AbortSignal.timeout(remaining),
+          signal: AbortSignal.timeout(Math.min(remaining, 4500)),
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemText }] },
             contents,
             generationConfig: {
               temperature: 0.4,
               maxOutputTokens: 2048,
-              thinkingConfig: { thinkingBudget: 0 },
+              ...(thinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
             },
           }),
         }
@@ -57,24 +61,19 @@ async function askGemini(key, systemText, contents) {
           ?.map((p) => p.text || '')
           .join('')
           .trim();
-        if (reply) return { reply };
-        lastError = 'Gemini returned an empty reply';
+        if (reply) return { reply, model };
+        errors.push(`${model}: empty reply`);
       } else {
         const text = await res.text();
-        lastError = `Gemini ${res.status}: ${text.slice(0, 300)}`;
-        console.error(lastError);
-        // Only retry temporary problems
-        if (![429, 500, 503].includes(res.status)) return { error: lastError };
+        errors.push(`${model}: ${res.status} ${text.slice(0, 120)}`);
       }
     } catch (err) {
-      lastError = `Request failed: ${err?.message || err}`;
-      console.error(lastError);
+      errors.push(`${model}: ${err?.message || err}`);
     }
-
-    await sleep(600);
   }
 
-  return { error: lastError };
+  console.error('All models failed', errors);
+  return { error: errors.join(' | ') || 'No model available' };
 }
 
 export default async (req) => {
