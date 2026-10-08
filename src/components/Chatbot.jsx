@@ -79,8 +79,18 @@ export default function Chatbot() {
   const [ctxReady, setCtxReady] = useState(false);
   const [pending, setPending] = useState(null);
   const endRef = useRef(null);
-  const inputRef = useRef(null);
+  const sessionRef = useRef(0);
 
+  // New user (or sign-out) = brand-new chat, so nobody sees someone else's conversation
+  useEffect(() => {
+    sessionRef.current += 1;
+    setMessages([{ role: 'assistant', text: GREETING }]);
+    setInput('');
+    setBusy(false);
+    setPending(null);
+    setCtx({ products: [], orders: [], returns: [], policies: [] });
+    setCtxReady(false);
+  }, [user?.uid]);
   // Let any "Ask ShopAssist" button open the panel (optionally with a prompt).
   useEffect(() => {
     const onOpen = (e) => {
@@ -160,6 +170,7 @@ export default function Chatbot() {
   const send = async (raw) => {
     const text = raw.trim();
     if (!text || busy) return;
+    const session = sessionRef.current;
     const next = [...messages, { role: 'user', text }];
     setMessages(next);
     setInput('');
@@ -175,14 +186,16 @@ export default function Chatbot() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { reply } = await res.json();
+      if (session !== sessionRef.current) return; // user changed meanwhile
       setMessages((m) => [...m, { role: 'assistant', text: reply }]);
     } catch {
+      if (session !== sessionRef.current) return;
       setMessages((m) => [
         ...m,
         { role: 'assistant', text: fallbackReply(text, ctx, user), offline: true },
       ]);
     } finally {
-      setBusy(false);
+      if (session === sessionRef.current) setBusy(false);
     }
   };
 
