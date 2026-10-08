@@ -145,3 +145,17 @@ export async function ensureDemoData(uid, key) {
   returns.forEach(([id, data]) => batch.set(doc(database, 'returns', id), data));
   await batch.commit();
 }
+
+export async function fetchChat(uid) {
+  const snap = await getDoc(doc(need(), 'chats', uid));
+  return snap.exists() ? snap.data().messages || [] : [];
+}
+
+export async function saveChat(uid, messages) {
+  const clean = messages.slice(-60).map((m) => ({
+    role: m.role,
+    text: String(m.text).slice(0, 2000),
+    ...(m.offline ? { offline: true } : {}),
+  }));
+  await setDoc(doc(need(), 'chats', uid), { userId: uid, messages: clean, updatedAt: Date.now() });
+}

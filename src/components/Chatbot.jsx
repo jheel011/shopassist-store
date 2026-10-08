@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Send, X, RotateCcw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { fetchOrders, fetchPolicies, fetchProducts, fetchReturns } from '../services/db';
+import { fetchChat, fetchOrders, fetchPolicies, fetchProducts, fetchReturns, saveChat } from '../services/db';
 import { fmtDate, inr, isoDate } from '../lib/format';
 import ProductImage from './ProductImage';
 
@@ -81,17 +81,39 @@ export default function Chatbot() {
   const endRef = useRef(null);
   const inputRef = useRef(null);
   const sessionRef = useRef(0);
+  const loadedFor = useRef(null); // which user's saved chat is currently on screen
 
-  // New user (or sign-out) = brand-new chat, so nobody sees someone else's conversation
+  // New user (or sign-out) = fresh chat, then load THAT user's saved history
   useEffect(() => {
     sessionRef.current += 1;
+    const session = sessionRef.current;
+    loadedFor.current = null;
     setMessages([{ role: 'assistant', text: GREETING }]);
     setInput('');
     setBusy(false);
     setPending(null);
     setCtx({ products: [], orders: [], returns: [], policies: [] });
     setCtxReady(false);
-  }, [user?.uid]);
+    if (!user) return undefined;
+
+    fetchChat(user.uid)
+      .then((saved) => {
+        if (session !== sessionRef.current) return; // user changed meanwhile
+        loadedFor.current = user.uid;
+        if (saved.length > 1) setMessages((cur) => (cur.length <= 1 ? saved : cur));
+      })
+      .catch(() => {
+        if (session === sessionRef.current) loadedFor.current = user.uid;
+      });
+    return undefined;
+  }, [user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save the chat whenever it changes (only after this user's history has loaded)
+  useEffect(() => {
+    if (!user || loadedFor.current !== user.uid || messages.length <= 1) return;
+    saveChat(user.uid, messages).catch(() => {});
+  }, [messages, user?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Let any "Ask ShopAssist" button open the panel (optionally with a prompt).
   useEffect(() => {
     const onOpen = (e) => {
@@ -209,7 +231,10 @@ export default function Chatbot() {
     }
   }, [pending, ctxReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reset = () => setMessages([{ role: 'assistant', text: GREETING }]);
+  const reset = () => {
+    setMessages([{ role: 'assistant', text: GREETING }]);
+    if (user) saveChat(user.uid, []).catch(() => {});
+  };
 
   return (
     <>
