@@ -1,0 +1,13 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // DEMO-GRADE rules for a college exhibition:
+    // anyone can read the catalogue and policies; signed-in users can read/write the rest.
+    // Tighten before using with real customers (tie orders/returns to request.auth.uid).
+    match /products/{id} { allow read: if true; allow write: if request.auth != null; }
+    match /policies/{id} { allow read: if true; allow write: if request.auth != null; }
+    match /{collection}/{id} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
