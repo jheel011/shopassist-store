@@ -1,4 +1,6 @@
-// Serverless Gemini proxy. The API key lives ONLY in this function's environment.
+// Serverless Gemini proxy. The API key lives ONLY in this function's environment
+// (GEMINI_API_KEY) and never reaches the browser.
+
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 const SYSTEM = `You are ShopAssist AI, the friendly shopping assistant of the ShopAssist e-commerce store.
@@ -21,18 +23,22 @@ const json = (body, status = 200) =>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Netlify stops synchronous functions at ~10 s, so everything must finish before that.
 async function askGemini(key, systemText, contents) {
   const started = Date.now();
-  let lastError = 'Upstream error';
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const left = 8500 - (Date.now() - started);
-    if (left < 1500) break;
+  let lastError = 'Unknown error';
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const remaining = 8500 - (Date.now() - started);
+    if (remaining < 1500) break;
+
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          signal: AbortSignal.timeout(remaining),
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemText }] },
             contents,
@@ -42,9 +48,9 @@ async function askGemini(key, systemText, contents) {
               thinkingConfig: { thinkingBudget: 0 },
             },
           }),
-          signal: AbortSignal.timeout(left),
         }
       );
+
       if (res.ok) {
         const data = await res.json();
         const reply = data?.candidates?.[0]?.content?.parts
@@ -52,18 +58,22 @@ async function askGemini(key, systemText, contents) {
           .join('')
           .trim();
         if (reply) return { reply };
-        lastError = 'Empty reply';
+        lastError = 'Gemini returned an empty reply';
       } else {
-        console.error('Gemini error', res.status, await res.text());
-        lastError = `Gemini ${res.status}`;
-        if (![429, 500, 503].includes(res.status)) break; // retrying won't help
+        const text = await res.text();
+        lastError = `Gemini ${res.status}: ${text.slice(0, 300)}`;
+        console.error(lastError);
+        // Only retry temporary problems
+        if (![429, 500, 503].includes(res.status)) return { error: lastError };
       }
     } catch (err) {
-      console.error('Gemini request failed', err);
-      lastError = 'Request failed';
+      lastError = `Request failed: ${err?.message || err}`;
+      console.error(lastError);
     }
+
     await sleep(600);
   }
+
   return { error: lastError };
 }
 
@@ -95,8 +105,8 @@ export default async (req) => {
   const systemText = `${SYSTEM}\n\nSTORE DATA (JSON):\n${context}`;
 
   const result = await askGemini(key, systemText, contents);
-  if (result.error) return json({ error: result.error }, 502);
-  return json({ reply: result.reply });
+  if (result.reply) return json({ reply: result.reply });
+  return json({ error: result.error }, 502);
 };
 
 export const config = { path: '/api/chat' };
