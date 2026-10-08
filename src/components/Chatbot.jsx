@@ -79,6 +79,7 @@ export default function Chatbot() {
   const [ctxReady, setCtxReady] = useState(false);
   const [pending, setPending] = useState(null);
   const endRef = useRef(null);
+  const inputRef = useRef(null);
   const sessionRef = useRef(0);
 
   // New user (or sign-out) = brand-new chat, so nobody sees someone else's conversation
